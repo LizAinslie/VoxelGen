@@ -1,48 +1,13 @@
 import {
-  AmbientLight, BoxBufferGeometry,
-  BoxGeometry, BufferAttribute, Color, Fog,
-  Mesh,
-  MeshBasicMaterial, MeshLambertMaterial,
-  PerspectiveCamera, PointLight,
-  Scene, TorusKnotGeometry, VertexColors,
+  AmbientLight, BoxGeometry, HemisphereLight, Mesh, MeshLambertMaterial,
+  PerspectiveCamera,
+  Scene,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { BufferGeometryUtils } from "three/examples/jsm/utils/BufferGeometryUtils";
-import SimplexNoise from "./simplex";
-
-const BLOCK_WIDTH = 5
-const SIZE_MAX = 128;
-const Y_MAX = 32;
-const HUE_MAX = 360
-const Y_COLOR_MULT = HUE_MAX / Y_MAX;
-
-const simplex = new SimplexNoise();
-
-function normalizeNoise(noise) {
-  return (noise + 1) * 0.5
-}
-
-class Block {
-  constructor(x, y, z, color) {
-    this.x = x;
-    this.y = y;
-    this.z = z;
-    this.color = color;
-
-    this.geometry = new BoxGeometry(BLOCK_WIDTH, BLOCK_WIDTH, BLOCK_WIDTH);
-    this.material = new MeshLambertMaterial({
-      color: this.color
-    });
-
-    this.mesh = new Mesh(this.geometry, this.material);
-    this.mesh.position.set(this.x * BLOCK_WIDTH, this.y * BLOCK_WIDTH, this.z * BLOCK_WIDTH);
-  }
-
-  getMesh() {
-    return this.mesh;
-  }
-}
+import { BLOCK_SIZE, World, WORLD_SIZE, Y_MAX } from "./world";
+import {EffectComposer} from "three/examples/jsm/postprocessing/EffectComposer";
+import {SSAOPass} from "three/examples/jsm/postprocessing/SSAOPass";
 
 export default class App {
   constructor(container) {
@@ -51,79 +16,47 @@ export default class App {
       antialias: true,
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setClearColor(new Color('skyblue'))
+    // this.renderer.setClearColor(new Color('skyblue'))
     this.container.appendChild(this.renderer.domElement);
-
-    this.scene = new Scene();
-
-    const cubeGeometries = []
-
-    for (let x = 0; x < SIZE_MAX; x++) {
-      for (let z = 0; z < SIZE_MAX; z++) {
-        const noiseX = x / 50;
-        const noiseZ = z / 50;
-
-        let y = normalizeNoise(simplex.noise(simplex.noise(noiseX, -noiseZ) + noiseX, simplex.noise(noiseZ, -noiseX) + noiseZ));
-        y *= Y_MAX;
-        y = Math.round(y);
-        // console.log("xyz", x, y, z);
-
-        let h = y;
-        while (h-- >= -1) {
-          if (h < -1) break;
-          const geometry = new BoxBufferGeometry(BLOCK_WIDTH, BLOCK_WIDTH, BLOCK_WIDTH);
-          geometry.translate(x * BLOCK_WIDTH, h * BLOCK_WIDTH, z * BLOCK_WIDTH);
-
-          let hue = h * Y_COLOR_MULT;
-          if (h === -1) hue = 0;
-          const color = new Color(`hsl(${hue}, 70%, 60%)`);
-          const rgb = color.toArray().map(v => v * 255);
-
-          // make an array to store colors for each vertex
-          const numVerts = geometry.getAttribute('position').count;
-          const itemSize = 3;  // r, g, b
-          const colors = new Uint8Array(itemSize * numVerts);
-
-          // copy the color into the colors array for each vertex
-          colors.forEach((v, ndx) => {
-            colors[ndx] = rgb[ndx % 3];
-          });
-
-          const normalized = true;
-          const colorAttrib = new BufferAttribute(colors, itemSize, normalized);
-          geometry.addAttribute('color', colorAttrib);
-
-          cubeGeometries.push(geometry);
-        }
-      }
-    }
-
-    const mergedGeometry = BufferGeometryUtils.mergeBufferGeometries(
-      cubeGeometries, false);
-    const material = new MeshLambertMaterial({
-      vertexColors: VertexColors,
-    });
-    const mesh = new Mesh(mergedGeometry, material);
-    this.scene.add(mesh);
-
-    const ambientLight = new AmbientLight(0xffffff);
-    this.scene.add(ambientLight);
 
     this.width = this.renderer.domElement.width;
     this.height = this.renderer.domElement.height;
 
-    this.camera = new PerspectiveCamera(40, this.width / this.height);
-    this.camera.position.y = (Y_MAX * BLOCK_WIDTH) * 2
+    this.camera = new PerspectiveCamera(75, this.width / this.height, 1, 2000);
+    this.camera.position.y = (Y_MAX * BLOCK_SIZE) * 2
+    this.camera.updateProjectionMatrix();
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.autoRotate = true;
-    this.controls.target.set(SIZE_MAX * 0.5 * BLOCK_WIDTH, 0, SIZE_MAX * 0.5 * BLOCK_WIDTH)
+    this.controls.target.set(WORLD_SIZE * 0.5 * BLOCK_SIZE, 0, WORLD_SIZE * 0.5 * BLOCK_SIZE)
     this.controls.update();
 
+    this.scene = new Scene();
+
+    // this.composer = new EffectComposer(this.renderer);
+    // const ssaoPass = new SSAOPass(this.scene, this.camera, this.width, this.height);
+    // ssaoPass.kernelRadius = 4;
+    // this.composer.addPass(ssaoPass);
+
+    this.world = new World(this.scene);
+    this.world.preGenerate();
+
+    const ambientLight = new AmbientLight(0xffffff);
+    this.scene.add(ambientLight);
+
     window.onresize = () => {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.width = window.innerWidth;
+      this.height = window.innerHeight;
+
+      this.camera.aspect = this.width / this.height;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.renderer.setSize(this.width, this.height);
+      // this.composer.setSize(this.width, this.height);
+    }
+
+    if (typeof window.__THREE_DEVTOOLS__ !== 'undefined') {
+      window.__THREE_DEVTOOLS__.dispatchEvent(new CustomEvent('observe', { detail: this.scene }));
+      window.__THREE_DEVTOOLS__.dispatchEvent(new CustomEvent('observe', { detail: this.renderer }));
     }
   }
     
@@ -136,5 +69,6 @@ export default class App {
     if (loadingDiv.style.display !== 'none') loadingDiv.style.display = 'none'
 
     this.renderer.render(this.scene, this.camera);
+    // this.composer.render();
   }
 }
